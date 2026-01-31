@@ -301,6 +301,8 @@ pub fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()>{
 		if app.rainbow{
 			app.wheel_pos = app.wheel_pos.wrapping_add(10);
 			app.typed_color = rainbow_wheel(app.wheel_pos);
+		} else{
+			app.typed_color = Color::Yellow;
 		}
 		
 		if app.finished{
