@@ -100,7 +100,7 @@ impl App {
 			finished: false,
 			typed: String::new(),
 			wheel_pos: 0,
-			rainbow: true,
+			rainbow: false,
 			typed_color: Color::Yellow,
 			stream: stream,
 			sink,
