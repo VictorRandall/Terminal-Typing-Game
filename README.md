@@ -12,3 +12,11 @@ Its purpose is to help understand the code by making it yourself.
 ```bash
 cargo run <file1> <file2> <etc>
 ```
+
+## Linux
+
+If you are on linux, you should run the following installations:
+
+```bash
+sudo apt install libasound2-dev
+```
