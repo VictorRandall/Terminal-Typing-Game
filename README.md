@@ -6,3 +6,9 @@ This is a game about learning source code. You can use any repo as it only needs
 Its purpose is to help understand the code by making it yourself.
 
 ![Preview](/Screenshot.png)
+
+## Usage
+
+```bash
+cargo run <file1> <file2> <etc>
+```
