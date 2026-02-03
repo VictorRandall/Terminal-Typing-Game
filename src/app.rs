@@ -1,7 +1,10 @@
+use std::fs::remove_file;
+use std::time::Instant;
 use std::{fs::File, time::Duration};
 use std::env::*;
-use std::io::{Read, Cursor};
+use std::io::{Write, Read, Cursor};
 
+use serde::{Deserialize, Serialize};
 use crossterm::event::{
 	self, 
 	Event
@@ -23,6 +26,7 @@ use ratatui::{
 	}, DefaultTerminal, Frame 
 };
 use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink};
+use chrono::{DateTime, Utc};
 
 use color_eyre::Result;
 
@@ -52,7 +56,6 @@ fn rainbow_wheel(mut wheel_pos: u8) -> Color {
 	}
 }
 
-// #[derive(Debug)]
 pub struct App{
 	// Programs
 	programs: Vec<Program>,
@@ -66,18 +69,69 @@ pub struct App{
 	// Sound Effect
 	stream: OutputStream,
 	sink: Sink,
+	
+	last_typed: Instant,
+	right_guesses: usize,
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub struct Save{
+	programs: Vec<String>,
+	current: usize,
+	typed: String,
+	time_saved: DateTime<Utc>,
+}
+
+impl Save {
+	pub fn new(app: &App) -> Self {
+		let mut programs: Vec<String> = vec![];
+		
+		for dir in app.programs.iter(){
+			programs.push(dir.name.clone());
+		}
+		
+		let current = app.current;
+		let typed = app.typed.clone();
+		
+		Self { 
+			programs, 
+			current, 
+			typed,
+			time_saved: Utc::now()
+		}
+	}
 }
 
 impl App {
 	pub fn new() -> Self{
 		let mut args: Vec<String> = args().collect();
 		args.remove(0);
-		println!("args here :=> {:?}", args);
-		
 		let mut programs = vec![];
 		
-		for path in args.iter(){
-			programs.push(Program::new(path.clone(), load_file(&path.as_str()) ));
+		let mut typed = String::new();
+		let mut current = 0;
+		
+		if !args.is_empty(){
+			println!("args here :=> {:?}", args);
+			
+			for path in args.iter(){
+				programs.push(Program::new(path.clone(), load_file(&path.as_str()) ));
+			}
+		} else {
+			match load_game("save.json"){
+				Some(game) => {
+					println!("reach!");
+					let dir = game.programs;
+					
+					for path in dir.iter(){
+						programs.push(Program::new(path.clone(), load_file(&path.as_str()) ));
+					}
+					
+					typed = game.typed;
+					current = game.current;
+				},
+				None => panic!("no save found!"),
+			}
 		}
 		
 		println!("{}",programs.len());
@@ -92,18 +146,20 @@ impl App {
 		let source = Decoder::new(cursor).unwrap();
 		
 		// Append to sink to play without blocking
-		sink.append(source);
+		stream.mixer().add(source);
 		
 		Self{
 			programs,
-			current: 0,
+			current,
 			finished: false,
-			typed: String::new(),
+			typed,
 			wheel_pos: 0,
 			rainbow: false,
 			typed_color: Color::Yellow,
 			stream: stream,
 			sink,
+			last_typed: Instant::now(),
+			right_guesses: 0,
 		}
 	}
 	pub fn get_current(&self) -> Option<Program>{
@@ -176,21 +232,24 @@ impl App {
 		let cursor = Cursor::new(sound_data);
 		let source = Decoder::new(cursor).unwrap();
 
-		self.sink.append(source);
-		self.sink.play();
+		// self.sink.append(source);
+		// self.sink.play();
+		self.stream.mixer().add(source);
 		if !self.typed.is_empty(){
 			self.typed.remove(self.typed.len().saturating_sub(1));
 		}
 		// Hardcore mode 
-		self.typed = String::new() 
+		// self.typed = String::new() 
 	}
-	pub fn play_correct_sound(&self) {
+	pub fn play_correct_sound(&mut self) {
 		let sound_data = include_bytes!("assets/click.wav");
 		let cursor = Cursor::new(sound_data);
 		let source = Decoder::new(cursor).unwrap();
 		
-		self.sink.append(source);
-		self.sink.play();
+		// self.sink.append(source);
+		// self.sink.play();
+		self.stream.mixer().add(source);
+		self.last_typed = Instant::now();
 	}
 	pub fn get_cursor_position(&self, tab_char: &str) -> (u16, u16) {
 		let mut x: u16 = 0;
@@ -296,6 +355,31 @@ pub fn load_file(path: &str) -> String{
 	}
 }
 
+pub fn save_game(path: &str, content: String){
+	let file = File::create(path);
+	match file {
+		Ok(mut f) => {
+			write!(f, "{}", content);
+		},
+		Err(e) => panic!("Couldnt create file: {}", e),
+	}
+}
+
+pub fn load_game(path: &str) -> Option<Save>{
+	let file = File::open(path);
+	match file {
+		Ok(mut f) => {
+			let mut contents = String::new();
+			match f.read_to_string(&mut contents){
+				Ok(_) => (),
+				Err(e) => panic!("Couldnt read file: {}", e),
+			}
+			serde_json::from_str(&contents).ok()
+		},
+		Err(e) => panic!("Couldnt open file: {}", e),
+	}
+}
+
 pub fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()>{
 	loop {
 		if app.rainbow{
@@ -307,19 +391,31 @@ pub fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()>{
 		
 		if app.finished{
 			if app.programs.len() == 1{
-				println!("{}",app.programs.len());
+				let _ = remove_file("save.json");
 				break Ok(());
 			} else {
-				app.programs.remove(0);
+				app.current += 1;
 				app.finished = false;
 				app.typed = String::new();
 			}
 		}
 		
+		app.rainbow = (Instant::now() - app.last_typed).as_secs_f64() <= 0.08;
+		
 		if event::poll(Duration::from_millis(16))?{
 			if let Event::Key(key) = event::read()? {
 				match key.code {
 					event::KeyCode::Esc => {
+						break Ok(());
+					},
+					event::KeyCode::End => {
+						let save = Save::new(&app);
+						
+						let serialized = match serde_json::to_string(&save){
+							Ok(s) => save_game("save.json", s),
+							Err(e) => panic!("{:?}", e),
+						};
+						
 						break Ok(());
 					},
 					event::KeyCode::Enter => {
@@ -341,4 +437,3 @@ pub fn run(mut terminal: DefaultTerminal, app: &mut App) -> Result<()>{
 		)?;
 	}
 }
-
